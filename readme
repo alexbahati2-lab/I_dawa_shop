@@ -1,0 +1,57 @@
+# 🏥 i_dawa_app — AI Pharmacy Management System
+
+**i_dawa_app** is a lightweight, offline-friendly pharmacy management system built with **Streamlit** and **SQLite**, designed for small and growing pharmacies.
+
+It combines **inventory management, sales, purchases, reports, barcode support**, and a **built-in AI assistant (Dawa AI)** to make daily pharmacy operations faster and safer.
+
+---
+
+## ✨ Key Features
+
+### 📦 Inventory Management
+- Add and manage medicines
+- Track batch numbers, expiry dates, stock levels
+- Automatic low-stock and near-expiry detection
+
+### 📥 Purchases (Stock In)
+- Record incoming stock
+- Update inventory automatically
+- Supplier and expiry tracking
+
+### 💊 Sales Module
+- Quick sales
+- Dosage-based sales
+- Automatic stock deduction
+- Sales receipts and daily reports
+
+### 📊 Reports
+- Low stock report
+- Expiry report
+- Daily sales summaries
+
+### 🤖 Dawa AI Assistant
+- Persistent glowing AI button across all screens
+- Search medicines by name or barcode
+- Answer questions like:
+  - *“Which drugs expire soon?”*
+  - *“Do we have Panadol Extra?”*
+- Text-based AI (voice optional depending on system support)
+
+### 📷 Barcode-Ready Design
+- Designed to support barcode scanners (keyboard-input compatible)
+- Products searchable by **name or barcode**
+
+---
+
+## 🛠️ Tech Stack
+
+- **Python 3.10+**
+- **Streamlit** (UI)
+- **SQLite** (Local database)
+- **SpeechRecognition** *(optional for voice input)*
+- **Modular architecture** (easy to extend)
+
+---
+
+## 📂 Project Structure
+
