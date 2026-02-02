@@ -1,171 +1,223 @@
+# ai_assistant.py
 import streamlit as st
 from database import get_connection
 from datetime import datetime, timedelta
 import difflib
 
-# -----------------------------
 NEAR_EXPIRY_DAYS = 30
 
-# Speech support (optional)
+
+# ======================================================
+# Optional Speech (safe fallback)
+# ======================================================
 try:
     import speech_recognition as sr
     SPEECH_ENABLED = True
-except:
+except Exception:
     SPEECH_ENABLED = False
 
-# -----------------------------
-def get_all_medicine_names():
-    conn = get_connection()
+
+# ======================================================
+# Database helpers (single connection usage)
+# ======================================================
+def get_all_medicine_names(conn):
     cur = conn.cursor()
     cur.execute("SELECT name FROM medicines")
-    names = [r[0] for r in cur.fetchall()]
-    conn.close()
-    return names
+    return [r[0] for r in cur.fetchall()]
 
-# -----------------------------
-def search_medicine(query):
-    conn = get_connection()
+
+def search_medicine(query, conn):
     cur = conn.cursor()
-
     cur.execute("""
         SELECT name, strength, units_in_stock, expiry_date, batch_no
         FROM medicines
         WHERE name LIKE ? OR batch_no LIKE ?
     """, (f"%{query}%", f"%{query}%"))
+    return cur.fetchall()
 
-    results = cur.fetchall()
-    conn.close()
-    return results
 
-# -----------------------------
-def expiry_report_ai():
-    conn = get_connection()
-    cur = conn.cursor()
+def expiry_report(conn):
     today = datetime.today().date()
     limit = today + timedelta(days=NEAR_EXPIRY_DAYS)
 
+    cur = conn.cursor()
     cur.execute("""
-        SELECT name, expiry_date FROM medicines
+        SELECT name, expiry_date
+        FROM medicines
         WHERE expiry_date IS NOT NULL
     """)
 
-    data = []
+    expiring = []
+
     for name, expiry in cur.fetchall():
         try:
             exp = datetime.strptime(expiry, "%Y-%m-%d").date()
             if exp <= limit:
-                data.append((name, expiry))
-        except:
+                expiring.append((name, expiry))
+        except Exception:
             pass
 
-    conn.close()
-    return data
+    return expiring
 
-# -----------------------------
+
+# ======================================================
+# AI Logic
+# ======================================================
 def process_ai_query(query):
     query = query.lower().strip()
 
-    if "expire" in query:
-        return expiry_report_ai(), "expiry"
+    conn = get_connection()
 
-    results = search_medicine(query)
+    # expiry questions
+    if "expire" in query or "expiry" in query:
+        results = expiry_report(conn)
+        conn.close()
+        return format_expiry(results)
+
+    # normal search
+    results = search_medicine(query, conn)
+
     if results:
-        return results, "medicine"
+        conn.close()
+        return format_medicine(results)
 
-    # typo correction
-    names = get_all_medicine_names()
+    # fuzzy suggestion
+    names = get_all_medicine_names(conn)
+    conn.close()
+
     suggestion = difflib.get_close_matches(query, names, n=1, cutoff=0.6)
+
     if suggestion:
-        return suggestion, "suggest"
+        return f"🤔 Did you mean **{suggestion[0]}** ?"
 
-    return None, "unknown"
+    return "❌ Drug not found. Try scanning barcode or typing full name."
 
-# -----------------------------
+
+# ======================================================
+# Formatters (clean responses)
+# ======================================================
+def format_medicine(results):
+    msg = "📦 **Medicine Results:**\n\n"
+
+    for n, s, stock, exp, batch in results:
+        line = f"**{n} {s}** — Stock: {stock}"
+        if exp:
+            line += f" | Expiry: {exp}"
+        if batch:
+            line += f" | Batch: {batch}"
+        msg += line + "\n"
+
+    return msg
+
+
+def format_expiry(results):
+    if not results:
+        return "✅ No drugs expiring soon."
+
+    msg = "⚠️ **Drugs expiring soon:**\n\n"
+    for n, e in results:
+        msg += f"- {n} (Expiry: {e})\n"
+
+    return msg
+
+
+# ======================================================
+# Voice (non-blocking safe)
+# ======================================================
 def listen_voice():
     if not SPEECH_ENABLED:
         return None
 
     r = sr.Recognizer()
-    with sr.Microphone() as source:
-        try:
-            audio = r.listen(source, timeout=5)
-            return r.recognize_google(audio)
-        except:
-            return None
 
-# -----------------------------
+    try:
+        with sr.Microphone() as source:
+            audio = r.listen(source, timeout=3)
+            return r.recognize_google(audio)
+    except Exception:
+        return None
+
+
+# ======================================================
+# UI Component
+# ======================================================
 def render_ai_fab():
-    # Floating glowing icon
+
+    # ---------- styles ----------
     st.markdown("""
     <style>
-    .ai-fab {
-        position: fixed;
-        bottom: 30px;
-        right: 30px;
-        background: radial-gradient(circle, #ffeb3b, #ff5722);
-        width: 80px;
-        height: 80px;
-        border-radius: 50%;
-        font-size: 40px;
-        color: white;
-        box-shadow: 0 0 20px #ffeb3b;
-        text-align: center;
-        line-height: 80px;
-        cursor: pointer;
-        z-index: 9999;
+    .chat-bubble-user {
+        background:#e3f2fd;
+        padding:10px;
+        border-radius:10px;
+        margin:5px 0;
+    }
+    .chat-bubble-bot {
+        background:#f1f8e9;
+        padding:10px;
+        border-radius:10px;
+        margin:5px 0;
     }
     </style>
     """, unsafe_allow_html=True)
 
-    if st.button("💡", key="ai_fab"):
-       st.session_state.ai_open = not st.session_state.ai_open
+    # ---------- state ----------
+    if "ai_open" not in st.session_state:
+        st.session_state.ai_open = False
 
-    if not st.session_state.get("ai_open"):
+    if "chat_history" not in st.session_state:
+        st.session_state.chat_history = []
+
+    # ---------- toggle button ----------
+    if st.button("💡 Assistant"):
+        st.session_state.ai_open = not st.session_state.ai_open
+
+    if not st.session_state.ai_open:
         return
 
-    st.markdown("---")
-    st.subheader("Your AI assistant")
+    st.divider()
+    st.subheader("🤖 Pharmacy Assistant")
 
-    mode = st.radio("Input Mode", ["Text", "Voice"], horizontal=True)
+    mode = st.radio("Input", ["Text", "Voice"], horizontal=True)
 
     query = ""
-    if mode == "Text":
-        query = st.text_input("Ask something…")
 
+    # ---------- TEXT ----------
+    if mode == "Text":
+        query = st.text_input("Ask something...", key="assistant_input")
+
+        if st.button("Send"):
+            handle_query(query)
+
+    # ---------- VOICE ----------
     else:
         if st.button("🎤 Speak"):
             st.info("Listening...")
             spoken = listen_voice()
+
             if spoken:
                 st.success(f"You said: {spoken}")
-                query = spoken
+                handle_query(spoken)
             else:
-                st.error("Speech not recognized")
+                st.error("Could not understand speech")
 
+
+    # ---------- display chat ----------
+    for role, msg in st.session_state.chat_history:
+        if role == "user":
+            st.markdown(f'<div class="chat-bubble-user">🧑 {msg}</div>', unsafe_allow_html=True)
+        else:
+            st.markdown(f'<div class="chat-bubble-bot">🤖 {msg}</div>', unsafe_allow_html=True)
+
+
+# ======================================================
+# Chat handler
+# ======================================================
+def handle_query(query):
     if not query:
         return
 
-    results, kind = process_ai_query(query)
+    reply = process_ai_query(query)
 
-    if kind == "expiry":
-        if results:
-            st.warning("⚠️ Drugs expiring soon:")
-            for n, e in results:
-                st.write(f"- {n} (Expiry: {e})")
-        else:
-            st.success("No drugs expiring soon.")
-
-    elif kind == "medicine":
-        for n, s, stock, exp, batch in results:
-            msg = f"**{n} {s}** — Stock: {stock}"
-            if exp:
-                msg += f" | Expiry: {exp}"
-            if batch:
-                msg += f" | Batch: {batch}"
-            st.write(msg)
-
-    elif kind == "suggest":
-        st.info(f"Did you mean **{results[0]}** ?")
-
-    else:
-        st.info("I couldn’t identify that drug. You can scan or type the barcode.")
+    st.session_state.chat_history.append(("user", query))
+    st.session_state.chat_history.append(("bot", reply))
