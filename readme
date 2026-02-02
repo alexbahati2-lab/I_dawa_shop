@@ -8,7 +8,7 @@ It combines **inventory management, sales, purchases, reports, barcode support**
 
 ## ✨ Key Features
 
-### 📦 Inventory Management
+## 📦 Inventory Management
 - Add and manage medicines
 - Track batch numbers, expiry dates, stock levels
 - Automatic low-stock and near-expiry detection
@@ -55,3 +55,18 @@ It combines **inventory management, sales, purchases, reports, barcode support**
 
 ## 📂 Project Structure
 
+i_dawa_app/
+│
+├── app.py # Main application entry
+├── database.py # Database setup and connection
+├── inventory.py # Inventory module
+├── purchases.py # Purchases (stock-in)
+├── sales.py # Sales logic
+├── reports.py # Reports (expiry, low stock)
+├── ai_assistant.py # Dawa AI (glowing assistant)
+│
+├── data/
+│ └── i_dawa.db # SQLite database
+│
+├── requirements.txt
+└── README.md

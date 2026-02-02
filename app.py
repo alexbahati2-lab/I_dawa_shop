@@ -10,26 +10,75 @@ from sales import (
 )
 from reports import low_stock_report, expiry_report
 from ai_assistant import render_ai_fab
+from utils.whatsapp_notifier import notify
 
-# --------------------------------
+# ---------------------------
+# LOGIN FUNCTION
+# ---------------------------
+def login_screen():
+    st.title("🔐 Idawa Shop Login")
+
+    name = st.text_input("Name")
+    password = st.text_input("Password", type="password")
+
+    st.caption("Demo password: 1234")  # password hint
+
+    if st.button("Login"):
+        if password == "1234" and name.strip():
+            st.session_state.logged_in = True
+            st.session_state.username = name
+
+            # 🔔 WhatsApp notify on login
+            try:
+                notify(name, "Logged into Idawa Shop Demo")
+            except Exception:
+                pass  # prevent crash if Twilio fails
+
+            st.success(f"Welcome, {name}!")
+            st.rerun()
+        else:
+            st.error("Invalid credentials")
+
+
+# ---------------------------
+# PAGE CONFIG
+# ---------------------------
 st.set_page_config(page_title="iDawa AI", layout="wide")
 init_db()
 
+# ---------------------------
+# AUTHENTICATION GATE
+# ---------------------------
+if "logged_in" not in st.session_state:
+    st.session_state.logged_in = False
+
+if not st.session_state.logged_in:
+    login_screen()
+    st.stop()  # stop execution until login
+
+# ---------------------------
 # Persistent AI state
+# ---------------------------
 if "ai_open" not in st.session_state:
     st.session_state.ai_open = False
 
-# --------------------------------
-st.title("🏥 AI Pharmacy App")
-st.caption("Fast • Safe • Simple")
+# ---------------------------
+# SIDEBAR + LOGOUT
+# ---------------------------
+st.sidebar.write(f"👤 {st.session_state.username}")
+
+if st.sidebar.button("Logout"):
+    st.session_state.clear()
+    st.rerun()
 
 menu = st.sidebar.radio(
     "Navigation",
     ["Dashboard", "Inventory", "Purchases", "Sales", "Reports"]
 )
 
-# --------------------------------
-# Main Screen Router
+# ---------------------------
+# MAIN SCREEN ROUTER
+# ---------------------------
 if menu == "Dashboard":
     st.subheader("📊 Dashboard")
     st.info("Welcome to AI Pharmacy App")
@@ -59,6 +108,7 @@ elif menu == "Reports":
     st.divider()
     expiry_report()
 
-# --------------------------------
-# 🚀 GLOBAL AI (PERSISTENT)
+# ---------------------------
+# GLOBAL AI (PERSISTENT)
 render_ai_fab()
+  
