@@ -3,12 +3,13 @@ import streamlit as st
 from database import get_connection
 from datetime import datetime, timedelta
 import difflib
+import re
 
 NEAR_EXPIRY_DAYS = 30
 
 
 # ======================================================
-# Optional Speech (safe fallback)
+# Optional Speech
 # ======================================================
 try:
     import speech_recognition as sr
@@ -18,7 +19,7 @@ except Exception:
 
 
 # ======================================================
-# Database helpers (single connection usage)
+# ---------------- DATABASE HELPERS --------------------
 # ======================================================
 def get_all_medicine_names(conn):
     cur = conn.cursor()
@@ -31,9 +32,31 @@ def search_medicine(query, conn):
     cur.execute("""
         SELECT name, strength, units_in_stock, expiry_date, batch_no
         FROM medicines
-        WHERE name LIKE ? OR batch_no LIKE ?
-    """, (f"%{query}%", f"%{query}%"))
+        WHERE LOWER(name) LIKE ? OR LOWER(batch_no) LIKE ?
+    """, (f"%{query.lower()}%", f"%{query.lower()}%"))
     return cur.fetchall()
+
+
+def get_low_stock(conn):
+    cur = conn.cursor()
+    cur.execute("""
+        SELECT name, units_in_stock
+        FROM medicines
+        WHERE units_in_stock < 10
+    """)
+    return cur.fetchall()
+
+
+def get_today_sales(conn):
+    today = datetime.today().strftime("%Y-%m-%d")
+    cur = conn.cursor()
+    cur.execute("""
+        SELECT SUM(total_price)
+        FROM sales
+        WHERE date LIKE ?
+    """, (f"{today}%",))
+    total = cur.fetchone()[0] or 0
+    return total
 
 
 def expiry_report(conn):
@@ -54,51 +77,51 @@ def expiry_report(conn):
             exp = datetime.strptime(expiry, "%Y-%m-%d").date()
             if exp <= limit:
                 expiring.append((name, expiry))
-        except Exception:
+        except:
             pass
 
     return expiring
 
 
 # ======================================================
-# AI Logic
+# --------------- SMART INTENT ENGINE ------------------
 # ======================================================
-def process_ai_query(query):
-    query = query.lower().strip()
+def normalize(text: str):
+    text = text.lower()
+    text = re.sub(r"[^a-z0-9 ]", "", text)
+    return text
 
-    conn = get_connection()
 
-    # expiry questions
-    if "expire" in query or "expiry" in query:
-        results = expiry_report(conn)
-        conn.close()
-        return format_expiry(results)
+def detect_intent(query):
+    q = normalize(query)
 
-    # normal search
-    results = search_medicine(query, conn)
+    greetings = ["hello", "hi", "hey"]
+    if any(g in q for g in greetings):
+        return "greet"
 
-    if results:
-        conn.close()
-        return format_medicine(results)
+    if "help" in q:
+        return "help"
 
-    # fuzzy suggestion
-    names = get_all_medicine_names(conn)
-    conn.close()
+    if "low stock" in q or "running out" in q:
+        return "low_stock"
 
-    suggestion = difflib.get_close_matches(query, names, n=1, cutoff=0.6)
+    if "expire" in q:
+        return "expiry"
 
-    if suggestion:
-        return f"🤔 Did you mean **{suggestion[0]}** ?"
+    if "sales today" in q or "today sales" in q:
+        return "sales_today"
 
-    return "❌ Drug not found. Try scanning barcode or typing full name."
+    if "inventory" in q or "all medicines" in q:
+        return "inventory"
+
+    return "medicine"  # default search
 
 
 # ======================================================
-# Formatters (clean responses)
+# --------------- RESPONSE FORMATTERS ------------------
 # ======================================================
 def format_medicine(results):
     msg = "📦 **Medicine Results:**\n\n"
-
     for n, s, stock, exp, batch in results:
         line = f"**{n} {s}** — Stock: {stock}"
         if exp:
@@ -106,7 +129,6 @@ def format_medicine(results):
         if batch:
             line += f" | Batch: {batch}"
         msg += line + "\n"
-
     return msg
 
 
@@ -117,58 +139,114 @@ def format_expiry(results):
     msg = "⚠️ **Drugs expiring soon:**\n\n"
     for n, e in results:
         msg += f"- {n} (Expiry: {e})\n"
+    return msg
 
+
+def format_low_stock(results):
+    if not results:
+        return "✅ All medicines sufficiently stocked."
+
+    msg = "📉 **Low Stock Medicines:**\n\n"
+    for n, stock in results:
+        msg += f"- {n} → {stock} left\n"
     return msg
 
 
 # ======================================================
-# Voice (non-blocking safe)
+# ------------------ AI CORE LOGIC ---------------------
+# ======================================================
+def process_ai_query(query):
+    intent = detect_intent(query)
+
+    conn = get_connection()
+
+    # ---------- GREETING ----------
+    if intent == "greet":
+        conn.close()
+        return "Hello 👋 How can I help you today?"
+
+    # ---------- HELP ----------
+    if intent == "help":
+        conn.close()
+        return (
+            "You can ask me things like:\n"
+            "• hello\n"
+            "• low stock\n"
+            "• expiry report\n"
+            "• today sales\n"
+            "• panadol stock\n"
+            "• search amoxicillin"
+        )
+
+    # ---------- LOW STOCK ----------
+    if intent == "low_stock":
+        res = get_low_stock(conn)
+        conn.close()
+        return format_low_stock(res)
+
+    # ---------- EXPIRY ----------
+    if intent == "expiry":
+        res = expiry_report(conn)
+        conn.close()
+        return format_expiry(res)
+
+    # ---------- TODAY SALES ----------
+    if intent == "sales_today":
+        total = get_today_sales(conn)
+        conn.close()
+        return f"💰 Today's sales total: **KSh {total:,.0f}**"
+
+    # ---------- INVENTORY ----------
+    if intent == "inventory":
+        names = get_all_medicine_names(conn)
+        conn.close()
+        return "📋 Inventory:\n\n" + ", ".join(names[:30]) + ("..." if len(names) > 30 else "")
+
+    # ---------- MEDICINE SEARCH ----------
+    results = search_medicine(query, conn)
+
+    if results:
+        conn.close()
+        return format_medicine(results)
+
+    # ---------- SUGGEST ----------
+    names = get_all_medicine_names(conn)
+    conn.close()
+
+    suggestion = difflib.get_close_matches(query, names, n=1, cutoff=0.5)
+    if suggestion:
+        return f"🤔 Did you mean **{suggestion[0]}** ?"
+
+    return "❌ Drug not found. Try typing full name or say 'help'."
+
+
+# ======================================================
+# ------------------ VOICE SUPPORT ---------------------
 # ======================================================
 def listen_voice():
     if not SPEECH_ENABLED:
         return None
 
     r = sr.Recognizer()
-
     try:
         with sr.Microphone() as source:
             audio = r.listen(source, timeout=3)
             return r.recognize_google(audio)
-    except Exception:
+    except:
         return None
 
 
 # ======================================================
-# UI Component
+# --------------------- UI -----------------------------
 # ======================================================
 def render_ai_fab():
 
-    # ---------- styles ----------
-    st.markdown("""
-    <style>
-    .chat-bubble-user {
-        background:#e3f2fd;
-        padding:10px;
-        border-radius:10px;
-        margin:5px 0;
-    }
-    .chat-bubble-bot {
-        background:#f1f8e9;
-        padding:10px;
-        border-radius:10px;
-        margin:5px 0;
-    }
-    </style>
-    """, unsafe_allow_html=True)
-
-    # ---------- state ----------
     if "ai_open" not in st.session_state:
         st.session_state.ai_open = False
 
     if "chat_history" not in st.session_state:
         st.session_state.chat_history = []
 
-    # ---------- toggle button ----------
     if st.button("💡 Assistant"):
         st.session_state.ai_open = not st.session_state.ai_open
 
@@ -178,40 +256,32 @@ def render_ai_fab():
     st.divider()
     st.subheader("🤖 Pharmacy Assistant")
 
-    mode = st.radio("Input", ["Text", "Voice"], horizontal=True)
+    conn = get_connection()
+    names = get_all_medicine_names(conn)
+    conn.close()
 
-    query = ""
+    # ---------- AUTOSUGGEST DROPDOWN ----------
+    query = st.selectbox(
+        "Ask something or pick a medicine",
+        [""] + names,
+        index=0
+    )
 
-    # ---------- TEXT ----------
-    if mode == "Text":
-        query = st.text_input("Ask something...", key="assistant_input")
+    manual = st.text_input("Or type naturally (e.g. 'how many panadol left')")
 
-        if st.button("Send"):
-            handle_query(query)
+    final_query = manual if manual else query
 
-    # ---------- VOICE ----------
-    else:
-        if st.button("🎤 Speak"):
-            st.info("Listening...")
-            spoken = listen_voice()
+    if st.button("Send"):
+        handle_query(final_query)
 
-            if spoken:
-                st.success(f"You said: {spoken}")
-                handle_query(spoken)
-            else:
-                st.error("Could not understand speech")
-
-
-    # ---------- display chat ----------
+    # ---------- CHAT HISTORY ----------
     for role, msg in st.session_state.chat_history:
-        if role == "user":
-            st.markdown(f'<div class="chat-bubble-user">🧑 {msg}</div>', unsafe_allow_html=True)
-        else:
-            st.markdown(f'<div class="chat-bubble-bot">🤖 {msg}</div>', unsafe_allow_html=True)
+        icon = "🧑" if role == "user" else "🤖"
+        st.write(f"{icon} {msg}")
 
 
 # ======================================================
-# Chat handler
+# ----------------- CHAT HANDLER -----------------------
 # ======================================================
 def handle_query(query):
     if not query:
